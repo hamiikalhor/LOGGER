@@ -3,51 +3,54 @@
 #include <stdint.h>
 
 // ============================================================
-// Configuration
+// PLATFORM SELECTION
 // ============================================================
 
-// Select platform: define one of these before including logger.h
-// #define USE_STM32
-// #define USE_ESP32
+// Define exactly one platform before including logger.h
+// STM32 with UART:  #define USE_STM32_UART
+// STM32 with RTT:   #define USE_STM32_RTT
+// ESP32 UART:       #define USE_ESP32
 
-#define LOGGER_USE_TIMESTAMP   1   // 0 = off, 1 = include timestamp
-#define LOGGER_ENABLE_COLORS   1   // 0 = off, 1 = colorized terminal
-#define LOGGER_LEVEL           LOG_LEVEL_DEBUG  // default global level
+#define LOGGER_USE_TIMESTAMP   1
+#define LOGGER_ENABLE_COLORS   1
+#define LOGGER_LEVEL           LOG_LEVEL_DEBUG
+//#define LOGGER_USE_FILELINE   1  // Uncomment to add file:line info
 
 // ============================================================
-// Platform Abstraction Layer
+// PLATFORM ABSTRACTION
 // ============================================================
 
-#if defined(USE_STM32)
-#include "usart.h"
-#define LOGGER_UART_HANDLE &huart2
+#if defined(USE_STM32_UART)
+#include "usart.h"    // STM32 HAL UART handle
 #include "stm32f4xx_hal.h"
-
 static inline void logger_write(const char *buf, int len) {
-    HAL_UART_Transmit(LOGGER_UART_HANDLE, (uint8_t*)buf, len, HAL_MAX_DELAY);
+    HAL_UART_Transmit(&huart2, (uint8_t*)buf, len, HAL_MAX_DELAY);
 }
-static inline uint32_t logger_timestamp(void) {
-    return HAL_GetTick();
+static inline uint32_t logger_timestamp(void) { return HAL_GetTick(); }
+
+#elif defined(USE_STM32_RTT)
+#include "SEGGER_RTT.h"
+static inline void logger_write(const char *buf, int len) {
+    (void)len; // RTT ignores length
+    SEGGER_RTT_WriteString(0, buf);
 }
+static inline uint32_t logger_timestamp(void) { return HAL_GetTick(); } // optional
 
 #elif defined(USE_ESP32)
 #include "driver/uart.h"
 #include "esp_timer.h"
 #define LOGGER_UART_NUM UART_NUM_0
-
 static inline void logger_write(const char *buf, int len) {
     uart_write_bytes(LOGGER_UART_NUM, buf, len);
 }
-static inline uint32_t logger_timestamp(void) {
-    return (uint32_t)(esp_timer_get_time() / 1000);
-}
+static inline uint32_t logger_timestamp(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
 
 #else
-#error "Please define USE_STM32 or USE_ESP32 before including logger.h"
+#error "Please define one platform: USE_STM32_UART, USE_STM32_RTT, USE_ESP32"
 #endif
 
 // ============================================================
-// Log Levels
+// LOG LEVELS
 // ============================================================
 
 typedef enum {
@@ -57,7 +60,6 @@ typedef enum {
     LOG_LEVEL_DEBUG
 } log_level_t;
 
-// Optional color output
 #if LOGGER_ENABLE_COLORS
 #define CLR_RESET  "\033[0m"
 #define CLR_RED    "\033[31m"
@@ -73,14 +75,29 @@ typedef enum {
 #endif
 
 // ============================================================
-// Core Logging Macro
+// CORE LOG MACRO
 // ============================================================
 
+#ifdef LOGGER_USE_FILELINE
 #define LOG(level, color, tag, fmt, ...) do { \
-    if (level <= LOGGER_LEVEL) { \
+    if(level <= LOGGER_LEVEL) { \
         char buf[160]; \
         int len; \
-        if (LOGGER_USE_TIMESTAMP) \
+        if(LOGGER_USE_TIMESTAMP) \
+            len = snprintf(buf, sizeof(buf), "%s[%lu] %s %s:%d: " fmt "%s\r\n", \
+                color, (unsigned long)logger_timestamp(), tag, __FILE__, __LINE__, ##__VA_ARGS__, CLR_RESET); \
+        else \
+            len = snprintf(buf, sizeof(buf), "%s%s %s:%d: " fmt "%s\r\n", \
+                color, tag, __FILE__, __LINE__, ##__VA_ARGS__, CLR_RESET); \
+        logger_write(buf, len); \
+    } \
+} while(0)
+#else
+#define LOG(level, color, tag, fmt, ...) do { \
+    if(level <= LOGGER_LEVEL) { \
+        char buf[160]; \
+        int len; \
+        if(LOGGER_USE_TIMESTAMP) \
             len = snprintf(buf, sizeof(buf), "%s[%lu] %s: " fmt "%s\r\n", \
                 color, (unsigned long)logger_timestamp(), tag, ##__VA_ARGS__, CLR_RESET); \
         else \
@@ -89,9 +106,10 @@ typedef enum {
         logger_write(buf, len); \
     } \
 } while(0)
+#endif
 
 // ============================================================
-// Convenience Macros
+// CONVENIENCE MACROS
 // ============================================================
 
 #define LOG_ERROR(fmt, ...) LOG(LOG_LEVEL_ERROR, CLR_RED,    "E", fmt, ##__VA_ARGS__)
